@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-const API_BASE = "http://localhost:5000";
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:5001";
 
 export default function PatientLoader({ onPatientLoaded }) {
   const [patientId, setPatientId] = useState("");
@@ -25,21 +25,23 @@ export default function PatientLoader({ onPatientLoaded }) {
   }
 
   return (
-    <section>
+    <section className="card">
       <h2>Load patient from FHIR</h2>
-      <p>Optional — enter a FHIR patient ID to pre-fill the form below.</p>
+      <p className="muted">Optional — enter a FHIR patient ID to pre-fill the form below.</p>
 
-      <input
-        type="text"
-        placeholder="e.g. smart-1234567"
-        value={patientId}
-        onChange={(e) => setPatientId(e.target.value)}
-      />
-      <button onClick={handleLoad} disabled={loading}>
-        {loading ? "Loading…" : "Load patient"}
-      </button>
+      <div className="inline-row">
+        <input
+          type="text"
+          placeholder="Enter FHIR patient ID"
+          value={patientId}
+          onChange={(e) => setPatientId(e.target.value)}
+        />
+        <button onClick={handleLoad} disabled={loading}>
+          {loading ? "Loading…" : "Load patient"}
+        </button>
+      </div>
 
-      {error && <p style={{ color: "red" }}>{error}</p>}
+      {error && <p className="error-text">{error}</p>}
     </section>
   );
 }
