@@ -4,7 +4,7 @@ from fhir_client import get_patient_data
 from prevent import calculate_prevent_score
 
 app = Flask(__name__)
-CORS(app, origins=["https://your-app.vercel.app", "http://localhost:3000"])
+CORS(app, origins=["https://public6440-project.vercel.app", "http://localhost:3000"])
 
 @app.route("/api/health", methods=["GET"])
 def health():
