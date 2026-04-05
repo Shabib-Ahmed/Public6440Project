@@ -228,6 +228,17 @@ button:disabled {
   color: #dc2626;
 }
 
+.field-error {
+  color: #dc2626;
+  font-size: 0.78rem;
+  margin-top: 0.15rem;
+}
+
+input.invalid,
+input:invalid:not(:placeholder-shown) {
+  border-color: #dc2626;
+}
+
 .empty-state {
   min-height: 220px;
   display: flex;

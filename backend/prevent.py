@@ -1,3 +1,12 @@
+_RANGES = {
+    "total_cholesterol": (20,   1200, "mg/dL"),
+    "hdl_cholesterol":   (2,    200,  "mg/dL"),
+    "systolic_bp":       (40,   320,  "mmHg"),
+    "egfr":              (1,    150,  "mL/min/1.73m²"),
+    "urine_acr":         (0,    15000, "mg/g"),
+}
+
+
 def _to_float(value, name):
     try:
         return float(value)
@@ -7,6 +16,15 @@ def _to_float(value, name):
 
 def _to_bool(value):
     return bool(value)
+
+
+def _check_range(value, name):
+    low, high, unit = _RANGES[name]
+    if not (low <= value <= high):
+        raise ValueError(
+            f"{name.replace('_', ' ').title()} must be between {low} and {high} {unit} "
+            f"(received {value})"
+        )
 
 
 def calculate_prevent_score(inputs: dict) -> dict:
@@ -27,8 +45,15 @@ def calculate_prevent_score(inputs: dict) -> dict:
     if not (30 <= age <= 79):
         raise ValueError("Age must be between 30 and 79")
 
-    if total_chol <= 0 or hdl <= 0 or sbp <= 0:
-        raise ValueError("Clinical values must be positive")
+    _check_range(total_chol, "total_cholesterol")
+    _check_range(hdl, "hdl_cholesterol")
+    _check_range(sbp, "systolic_bp")
+
+    if hdl >= total_chol:
+        raise ValueError(
+            f"HDL cholesterol ({hdl}) cannot be greater than or equal to "
+            f"total cholesterol ({total_chol})"
+        )
 
     risk_points = 0.0
 
@@ -44,11 +69,13 @@ def calculate_prevent_score(inputs: dict) -> dict:
 
     if egfr not in (None, ""):
         egfr = _to_float(egfr, "egfr")
+        _check_range(egfr, "egfr")
         if egfr < 60:
             risk_points += min(6.0, (60 - egfr) * 0.15)
 
     if urine_acr not in (None, ""):
         urine_acr = _to_float(urine_acr, "urine_acr")
+        _check_range(urine_acr, "urine_acr")
         if urine_acr > 30:
             risk_points += min(5.0, (urine_acr - 30) * 0.03)
 

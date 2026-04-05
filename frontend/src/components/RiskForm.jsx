@@ -15,8 +15,52 @@ const DEFAULT_FORM = {
   urineAcr: "",
 };
 
+const FIELD_RULES = {
+  age:             { min: 30,  max: 79,    unit: "",              label: "Age" },
+  totalCholesterol:{ min: 20,  max: 1200,  unit: "mg/dL",         label: "Total cholesterol" },
+  hdlCholesterol:  { min: 2,   max: 200,   unit: "mg/dL",         label: "HDL cholesterol" },
+  systolicBP:      { min: 40,  max: 320,   unit: "mmHg",          label: "Systolic BP" },
+  egfr:            { min: 1,   max: 150,   unit: "mL/min/1.73m²", label: "eGFR" },
+  urineAcr:        { min: 0,   max: 15000, unit: "mg/g",          label: "Urine ACR" },
+};
+
+function validateForm(form) {
+  const errors = {};
+
+  for (const [field, rule] of Object.entries(FIELD_RULES)) {
+    const raw = form[field];
+    if (raw === "" || raw === null || raw === undefined) continue; // optional fields skip
+
+    const num = Number(raw);
+    if (isNaN(num)) {
+      errors[field] = `${rule.label} must be a number`;
+      continue;
+    }
+    if (num < rule.min || num > rule.max) {
+      errors[field] = `${rule.label}: expected ${rule.min}–${rule.max}${rule.unit ? " " + rule.unit : ""} (got ${num})`;
+    }
+  }
+
+  // Required fields
+  for (const field of ["age", "totalCholesterol", "hdlCholesterol", "systolicBP"]) {
+    if (form[field] === "" || form[field] === null || form[field] === undefined) {
+      errors[field] = `${FIELD_RULES[field].label} is required`;
+    }
+  }
+
+  // Cross-field: HDL must be less than total cholesterol
+  const hdl = Number(form.hdlCholesterol);
+  const tc = Number(form.totalCholesterol);
+  if (!isNaN(hdl) && !isNaN(tc) && tc > 0 && hdl >= tc) {
+    errors.hdlCholesterol = `HDL (${hdl}) must be less than total cholesterol (${tc})`;
+  }
+
+  return errors;
+}
+
 export default function RiskForm({ prefill, onResult }) {
   const [form, setForm] = useState(DEFAULT_FORM);
+  const [fieldErrors, setFieldErrors] = useState({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -39,13 +83,29 @@ export default function RiskForm({ prefill, onResult }) {
 
   function handleChange(e) {
     const { name, value, type, checked } = e.target;
-    setForm((prev) => ({
-      ...prev,
-      [name]: type === "checkbox" ? checked : value,
-    }));
+    const newForm = { ...form, [name]: type === "checkbox" ? checked : value };
+    setForm(newForm);
+    // Re-validate only the touched field (and HDL/TC together)
+    const errs = validateForm(newForm);
+    setFieldErrors((prev) => {
+      const next = { ...prev };
+      if (errs[name]) next[name] = errs[name];
+      else delete next[name];
+      // keep HDL cross-field error in sync
+      if (name === "hdlCholesterol" || name === "totalCholesterol") {
+        if (errs.hdlCholesterol) next.hdlCholesterol = errs.hdlCholesterol;
+        else delete next.hdlCholesterol;
+      }
+      return next;
+    });
   }
 
   async function handleSubmit() {
+    const errs = validateForm(form);
+    if (Object.keys(errs).length > 0) {
+      setFieldErrors(errs);
+      return;
+    }
     setLoading(true);
     setError(null);
 
@@ -79,7 +139,8 @@ export default function RiskForm({ prefill, onResult }) {
       <div className="form-grid">
         <label>
           Age
-          <input name="age" type="number" value={form.age} onChange={handleChange} />
+          <input name="age" type="number" min="30" max="79" value={form.age} onChange={handleChange} />
+          {fieldErrors.age && <span className="field-error">{fieldErrors.age}</span>}
         </label>
 
         <label>
@@ -92,27 +153,32 @@ export default function RiskForm({ prefill, onResult }) {
 
         <label>
           Total cholesterol (mg/dL)
-          <input name="totalCholesterol" type="number" value={form.totalCholesterol} onChange={handleChange} />
+          <input name="totalCholesterol" type="number" min="20" max="1200" value={form.totalCholesterol} onChange={handleChange} />
+          {fieldErrors.totalCholesterol && <span className="field-error">{fieldErrors.totalCholesterol}</span>}
         </label>
 
         <label>
           HDL cholesterol (mg/dL)
-          <input name="hdlCholesterol" type="number" value={form.hdlCholesterol} onChange={handleChange} />
+          <input name="hdlCholesterol" type="number" min="2" max="200" value={form.hdlCholesterol} onChange={handleChange} />
+          {fieldErrors.hdlCholesterol && <span className="field-error">{fieldErrors.hdlCholesterol}</span>}
         </label>
 
         <label>
           Systolic BP (mmHg)
-          <input name="systolicBP" type="number" value={form.systolicBP} onChange={handleChange} />
+          <input name="systolicBP" type="number" min="40" max="320" value={form.systolicBP} onChange={handleChange} />
+          {fieldErrors.systolicBP && <span className="field-error">{fieldErrors.systolicBP}</span>}
         </label>
 
         <label>
-          eGFR (optional)
-          <input name="egfr" type="number" value={form.egfr} onChange={handleChange} />
+          eGFR (optional, mL/min/1.73m²)
+          <input name="egfr" type="number" min="1" max="150" value={form.egfr} onChange={handleChange} />
+          {fieldErrors.egfr && <span className="field-error">{fieldErrors.egfr}</span>}
         </label>
 
         <label>
-          Urine ACR (optional)
-          <input name="urineAcr" type="number" value={form.urineAcr} onChange={handleChange} />
+          Urine ACR (optional, mg/g)
+          <input name="urineAcr" type="number" min="0" max="15000" value={form.urineAcr} onChange={handleChange} />
+          {fieldErrors.urineAcr && <span className="field-error">{fieldErrors.urineAcr}</span>}
         </label>
       </div>
 

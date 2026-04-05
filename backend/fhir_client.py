@@ -37,7 +37,19 @@ def _latest_observation(patient_id: str, loinc_code: str):
         vq = resource.get("valueQuantity")
         if vq and "value" in vq:
             try:
-                return float(vq["value"])
+                value = float(vq["value"])
+                unit = (vq.get("unit") or vq.get("code") or "").strip().lower()
+
+                # HbA1c: some FHIR servers return mmol/mol (IFCC) instead of % (NGSP).
+                # Values >20 in the % scale are physiologically impossible, so treat as IFCC.
+                if loinc_code == LOINC["hba1c"]:
+                    if unit in ("mmol/mol", "mmol mol-1") or value > 20:
+                        # IFCC → NGSP conversion: NGSP(%) = 0.0915 × IFCC + 2.15
+                        value = round(0.0915 * value + 2.15, 1)
+                    if not (3.0 <= value <= 20.0):
+                        continue  # implausible after conversion, skip this entry
+
+                return value
             except (TypeError, ValueError):
                 continue
     return None
