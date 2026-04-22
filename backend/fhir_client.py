@@ -62,6 +62,29 @@ def _get(path, params=None):
     return resp.json()
 
 
+def _extract_value(resource: dict, target_loinc: str | None = None) -> float | None:
+    vq = resource.get("valueQuantity")
+    if vq and "value" in vq:
+        try:
+            return float(vq["value"])
+        except (TypeError, ValueError):
+            pass
+
+    for component in resource.get("component", []):
+        codes = [
+            c.get("code")
+            for c in component.get("code", {}).get("coding", [])
+        ]
+        if target_loinc is None or target_loinc in codes:
+            cvq = component.get("valueQuantity")
+            if cvq and "value" in cvq:
+                try:
+                    return float(cvq["value"])
+                except (TypeError, ValueError):
+                    pass
+    return None
+
+
 def _latest_observation(patient_id: str, loinc_code: str):
     data = _get("/Observation", {
         "patient": patient_id,
@@ -69,14 +92,28 @@ def _latest_observation(patient_id: str, loinc_code: str):
         "_count": "50",
         "_sort": "-date",
     })
-    for entry in data.get("entry", []):
-        resource = entry.get("resource", {})
-        vq = resource.get("valueQuantity")
-        if vq and "value" in vq:
-            try:
-                return float(vq["value"])
-            except (TypeError, ValueError):
-                continue
+    entries = data.get("entry", [])
+
+    if not entries:
+        if loinc_code == "8480-6":
+            data = _get("/Observation", {
+                "patient": patient_id,
+                "code": "55284-4",
+                "_count": "50",
+                "_sort": "-date",
+            })
+            entries = data.get("entry", [])
+
+    def _effective_date(entry):
+        r = entry.get("resource", {})
+        return r.get("effectiveDateTime") or r.get("effectivePeriod", {}).get("start") or ""
+
+    entries = sorted(entries, key=_effective_date, reverse=True)
+
+    for entry in entries:
+        value = _extract_value(entry.get("resource", {}), target_loinc=loinc_code)
+        if value is not None:
+            return value
     return None
 
 
@@ -148,7 +185,6 @@ def get_patient_data(patient_id: str) -> dict:
     urine_acr  = obs_results.get("urine_acr")
     bmi        = obs_results.get("bmi")
 
-    # Fetch conditions and medications in parallel
     with ThreadPoolExecutor(max_workers=3) as pool:
         f_diabetes   = pool.submit(_has_condition, patient_id, "73211009")   # SNOMED: DM
         f_smoker     = pool.submit(_has_condition, patient_id, "77176002")   # SNOMED: smoker
