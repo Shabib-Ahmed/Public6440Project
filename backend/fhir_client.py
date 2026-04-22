@@ -71,10 +71,8 @@ def _extract_value(resource: dict, target_loinc: str | None = None) -> float | N
             pass
 
     for component in resource.get("component", []):
-        codes = [
-            c.get("code")
-            for c in component.get("code", {}).get("coding", [])
-        ]
+        codings = component.get("code", {}).get("coding", [])
+        codes = [c.get("code") for c in codings]
         if target_loinc is None or target_loinc in codes:
             cvq = component.get("valueQuantity")
             if cvq and "value" in cvq:
@@ -86,23 +84,15 @@ def _extract_value(resource: dict, target_loinc: str | None = None) -> float | N
 
 
 def _latest_observation(patient_id: str, loinc_code: str):
+    query_code = "55284-4" if loinc_code == "8480-6" else loinc_code
+
     data = _get("/Observation", {
         "patient": patient_id,
-        "code": loinc_code,
+        "code": query_code,
         "_count": "50",
         "_sort": "-date",
     })
     entries = data.get("entry", [])
-
-    if not entries:
-        if loinc_code == "8480-6":
-            data = _get("/Observation", {
-                "patient": patient_id,
-                "code": "55284-4",
-                "_count": "50",
-                "_sort": "-date",
-            })
-            entries = data.get("entry", [])
 
     def _effective_date(entry):
         r = entry.get("resource", {})
@@ -185,6 +175,7 @@ def get_patient_data(patient_id: str) -> dict:
     urine_acr  = obs_results.get("urine_acr")
     bmi        = obs_results.get("bmi")
 
+    # Fetch conditions and medications in parallel
     with ThreadPoolExecutor(max_workers=3) as pool:
         f_diabetes   = pool.submit(_has_condition, patient_id, "73211009")   # SNOMED: DM
         f_smoker     = pool.submit(_has_condition, patient_id, "77176002")   # SNOMED: smoker
