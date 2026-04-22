@@ -1,5 +1,6 @@
 import os
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 
 FHIR_BASE = os.getenv("FHIR_BASE", "https://r4.smarthealthit.org").rstrip("/")
@@ -12,27 +13,63 @@ LOINC = {
     "hba1c":             "4548-4",
     "egfr":              "33914-3",
     "urine_acr":         "14959-1",
+    "bmi":               "39156-5",
 }
 
-def _latest_observation(patient_id: str, loinc_code: str):
+# RxNorm: antihypertensive drug classes (ingredient-level codes)
+# ACE inhibitors, ARBs, CCBs, thiazides, beta-blockers (common agents)
+ANTIHYPERTENSIVE_RXNORM = [
+    "29046",   # lisinopril
+    "214354",  # lisinopril/HCTZ
+    "17767",   # amlodipine
+    "83515",   # amlodipine (alt)
+    "203160",  # atenolol
+    "1091643", # metoprolol succinate
+    "866511",  # metoprolol tartrate
+    "41493",   # losartan
+    "214354",  # valsartan
+    "83818",   # hydrochlorothiazide
+    "153665",  # chlorthalidone
+    "321064",  # olmesartan
+    "321827",  # irbesartan
+    "35208",   # ramipril
+    "18867",   # carvedilol
+    "1998",    # enalapril
+]
+
+# RxNorm: statin ingredient-level codes
+STATIN_RXNORM = [
+    "301542",  # rosuvastatin
+    "83367",   # atorvastatin
+    "41127",   # fluvastatin
+    "42463",   # pravastatin
+    "36567",   # simvastatin
+    "103919",  # cerivastatin
+    "312961",  # lovastatin
+    "monograph-pitavastatin",
+    "861634",  # pitavastatin
+]
+
+
+def _get(path, params=None):
     resp = requests.get(
-        f"{FHIR_BASE}/Observation",
-        params={
-            "patient": patient_id,
-            "code": loinc_code,
-            "_count": "50",
-            "_sort": "-date",
-        },
+        f"{FHIR_BASE}{path}",
+        params=params,
         headers=HEADERS,
         timeout=10,
     )
     resp.raise_for_status()
+    return resp.json()
 
-    entries = resp.json().get("entry", [])
-    if not entries:
-        return None
 
-    for entry in entries:
+def _latest_observation(patient_id: str, loinc_code: str):
+    data = _get("/Observation", {
+        "patient": patient_id,
+        "code": loinc_code,
+        "_count": "50",
+        "_sort": "-date",
+    })
+    for entry in data.get("entry", []):
         resource = entry.get("resource", {})
         vq = resource.get("valueQuantity")
         if vq and "value" in vq:
@@ -55,48 +92,30 @@ def _get_sex(patient_resource: dict) -> str:
 
 
 def _has_condition(patient_id: str, snomed_code: str) -> bool:
-    resp = requests.get(
-        f"{FHIR_BASE}/Condition",
-        params={
-            "patient": patient_id,
-            "code": snomed_code,
-            "clinical-status": "active",
-            "_count": "1",
-        },
-        headers=HEADERS,
-        timeout=10,
-    )
-    resp.raise_for_status()
-    return bool(resp.json().get("entry"))
+    data = _get("/Condition", {
+        "patient": patient_id,
+        "code": snomed_code,
+        "clinical-status": "active",
+        "_count": "1",
+    })
+    return bool(data.get("entry"))
 
 
-def _has_medication(patient_id: str, rxnorm_codes: list[str]) -> bool:
+def _has_medication(patient_id: str, rxnorm_codes: list) -> bool:
     for code in rxnorm_codes:
-        resp = requests.get(
-            f"{FHIR_BASE}/MedicationRequest",
-            params={
-                "patient": patient_id,
-                "code": code,
-                "status": "active",
-                "_count": "1",
-            },
-            headers=HEADERS,
-            timeout=10,
-        )
-        resp.raise_for_status()
-        if resp.json().get("entry"):
+        data = _get("/MedicationRequest", {
+            "patient": patient_id,
+            "code": code,
+            "status": "active",
+            "_count": "1",
+        })
+        if data.get("entry"):
             return True
     return False
 
 
 def get_patient_data(patient_id: str) -> dict:
-    pt_resp = requests.get(
-        f"{FHIR_BASE}/Patient/{patient_id}",
-        headers=HEADERS,
-        timeout=10,
-    )
-    pt_resp.raise_for_status()
-    pt = pt_resp.json()
+    pt = _get(f"/Patient/{patient_id}")
 
     age = _get_age(pt["birthDate"]) if "birthDate" in pt else None
     sex = _get_sex(pt)
@@ -106,29 +125,55 @@ def get_patient_data(patient_id: str) -> dict:
     family = name_parts.get("family", "")
     full_name = f"{given} {family}".strip()
 
-    total_chol = _latest_observation(patient_id, LOINC["total_cholesterol"])
-    hdl_chol = _latest_observation(patient_id, LOINC["hdl_cholesterol"])
-    systolic = _latest_observation(patient_id, LOINC["systolic_bp"])
-    hba1c = _latest_observation(patient_id, LOINC["hba1c"])
-    egfr = _latest_observation(patient_id, LOINC["egfr"])
-    urine_acr = _latest_observation(patient_id, LOINC["urine_acr"])
+    # Fetch all observations in parallel
+    obs_keys = list(LOINC.keys())
+    obs_results = {}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {
+            pool.submit(_latest_observation, patient_id, LOINC[k]): k
+            for k in obs_keys
+        }
+        for future in as_completed(futures):
+            key = futures[future]
+            try:
+                obs_results[key] = future.result()
+            except Exception:
+                obs_results[key] = None
 
-    diabetes = True if hba1c is not None and hba1c >= 6.5 else _has_condition(patient_id, "73211009")
-    smoker = _has_condition(patient_id, "77176002")
-    bp_treatment = _has_medication(patient_id, ["29046", "17767", "203160"])
+    total_chol = obs_results.get("total_cholesterol")
+    hdl_chol   = obs_results.get("hdl_cholesterol")
+    systolic   = obs_results.get("systolic_bp")
+    hba1c      = obs_results.get("hba1c")
+    egfr       = obs_results.get("egfr")
+    urine_acr  = obs_results.get("urine_acr")
+    bmi        = obs_results.get("bmi")
+
+    # Fetch conditions and medications in parallel
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        f_diabetes   = pool.submit(_has_condition, patient_id, "73211009")   # SNOMED: DM
+        f_smoker     = pool.submit(_has_condition, patient_id, "77176002")   # SNOMED: smoker
+        f_bp_rx      = pool.submit(_has_medication, patient_id, ANTIHYPERTENSIVE_RXNORM)
+        f_statin     = pool.submit(_has_medication, patient_id, STATIN_RXNORM)
+
+    diabetes    = (hba1c is not None and hba1c >= 6.5) or f_diabetes.result()
+    smoker      = f_smoker.result()
+    bp_treatment = f_bp_rx.result()
+    statin      = f_statin.result()
 
     return {
-        "patient_id": patient_id,
-        "name": full_name,
-        "age": age,
-        "sex": sex,
+        "patient_id":      patient_id,
+        "name":            full_name,
+        "age":             age,
+        "sex":             sex,
         "total_cholesterol": total_chol,
-        "hdl_cholesterol": hdl_chol,
-        "systolic_bp": systolic,
-        "hba1c": hba1c,
-        "egfr": egfr,
-        "urine_acr": urine_acr,
-        "diabetes": diabetes,
-        "smoker": smoker,
-        "bp_treatment": bp_treatment,
+        "hdl_cholesterol":   hdl_chol,
+        "systolic_bp":       systolic,
+        "hba1c":             hba1c,
+        "egfr":              egfr,
+        "urine_acr":         urine_acr,
+        "bmi":               bmi,
+        "diabetes":          diabetes,
+        "smoker":            smoker,
+        "bp_treatment":      bp_treatment,
+        "statin":            statin,
     }
